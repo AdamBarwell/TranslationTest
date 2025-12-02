@@ -1,332 +1,313 @@
 """
-XLF Translator Module
+XLF Parser for Articulate Storyline Translation Files
 
-Sends translatable text to OpenAI API with proper handling of:
-- __SEG__ marker preservation for multi-segment units
-- Brand names and special terms
-- Batch translation for efficiency
-- Retry logic for failed translations
+Handles XLF 1.2 format with two main trans-unit types:
+1. datatype="plaintext" - Simple text strings (scene names, buttons, etc.)
+2. datatype="x-DocumentState" - Complex styled content with inline tags
+
+Key features:
+- Extracts translatable text while preserving tag structure
+- Handles multi-<g> segments that form single sentences
+- Preserves whitespace (xml:space="preserve")
+- Validates tag pairing (bpt/ept matching)
 """
 
-import os
-from typing import List, Dict, Optional
+from lxml import etree
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-import time
-
-try:
-    from openai import OpenAI
-except ImportError:
-    print("Warning: openai package not installed. Run: pip install openai")
-    OpenAI = None
+import re
 
 
 @dataclass
-class TranslationResult:
-    """Result of a translation operation"""
-    success: bool
-    translated_text: str
-    original_text: str
-    unit_id: str
-    error_message: Optional[str] = None
-    retry_count: int = 0
+class TransUnit:
+    """Represents a single translation unit from XLF"""
+    id: str
+    datatype: str
+    source_element: etree._Element  # Keep reference to original element
+    translatable_text: str
+    has_inline_tags: bool
+    xml_space_preserve: bool
+    tag_map: Dict[str, etree._Element]  # Placeholder -> original tag element
+    g_segments: List[Dict]  # For x-DocumentState: list of <g> tag info
 
 
-class XLFTranslator:
-    """Translator for XLF content using OpenAI API"""
+class XLFParser:
+    """Parser for XLF 1.2 translation files"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o"):
+    # Namespace for XLF 1.2
+    NS = {'xliff': 'urn:oasis:names:tc:xliff:document:1.2'}
+    
+    def __init__(self, xlf_path: str):
         """
-        Initialize translator with API key
+        Initialize parser with XLF file path
         
         Args:
-            api_key: OpenAI API key (or set OPENAI_API_KEY env var)
-            model: OpenAI model to use (default: gpt-4o)
+            xlf_path: Path to the XLF file
         """
-        if OpenAI is None:
-            raise ImportError("openai package required. Install with: pip install openai")
-        
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
-        if not self.api_key:
-            raise ValueError("API key required. Set OPENAI_API_KEY or pass api_key parameter")
-        
-        self.client = OpenAI(api_key=self.api_key)
-        self.model = model
-        self.stats = {
-            'total_translations': 0,
-            'successful': 0,
-            'failed': 0,
-            'retries': 0
-        }
+        self.xlf_path = xlf_path
+        self.tree = None
+        self.root = None
+        self._load_file()
     
-    def translate_unit(self, 
-                      text: str, 
-                      unit_id: str,
-                      target_language: str,
-                      has_seg_markers: bool = False,
-                      preserve_terms: Optional[List[str]] = None,
-                      max_retries: int = 2) -> TranslationResult:
+    def _load_file(self):
+        """Load and parse the XLF file"""
+        try:
+            parser = etree.XMLParser(remove_blank_text=False, strip_cdata=False)
+            self.tree = etree.parse(self.xlf_path, parser)
+            self.root = self.tree.getroot()
+        except etree.XMLSyntaxError as e:
+            raise ValueError(f"Invalid XML in XLF file: {e}")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"XLF file not found: {self.xlf_path}")
+    
+    def get_source_language(self) -> str:
+        """Extract source language from file element"""
+        file_elem = self.root.find('.//xliff:file', self.NS)
+        if file_elem is not None:
+            return file_elem.get('source-language', 'unknown')
+        return 'unknown'
+    
+    def get_target_language(self) -> Optional[str]:
+        """Extract target language if specified"""
+        file_elem = self.root.find('.//xliff:file', self.NS)
+        if file_elem is not None:
+            return file_elem.get('target-language')
+        return None
+    
+    def parse_all_units(self) -> List[TransUnit]:
         """
-        Translate a single unit
+        Parse all trans-units from the XLF file
+        
+        Returns:
+            List of TransUnit objects ready for translation
+        """
+        trans_units = self.root.findall('.//xliff:trans-unit', self.NS)
+        parsed_units = []
+        
+        for unit in trans_units:
+            try:
+                parsed = self._parse_trans_unit(unit)
+                if parsed:
+                    parsed_units.append(parsed)
+            except Exception as e:
+                unit_id = unit.get('id', 'unknown')
+                print(f"Warning: Failed to parse trans-unit {unit_id}: {e}")
+        
+        return parsed_units
+    
+    def _parse_trans_unit(self, unit: etree._Element) -> Optional[TransUnit]:
+        """
+        Parse a single trans-unit element
         
         Args:
-            text: Text to translate
-            unit_id: Unit ID for tracking
-            target_language: Target language code or name (e.g., 'es', 'Spanish', 'fr')
-            has_seg_markers: Whether text contains __SEG__ markers
-            preserve_terms: List of terms to not translate (e.g., brand names)
-            max_retries: Maximum retry attempts
+            unit: The <trans-unit> XML element
             
         Returns:
-            TranslationResult object
+            TransUnit object or None if no translatable content
         """
-        if not text or not text.strip():
-            return TranslationResult(
-                success=True,
-                translated_text=text,
-                original_text=text,
-                unit_id=unit_id,
-                error_message="Empty text, skipped translation"
-            )
+        unit_id = unit.get('id')
+        datatype = unit.get('datatype', 'plaintext')
+        xml_space = unit.get('{http://www.w3.org/XML/1998/namespace}space')
+        preserve_space = xml_space == 'preserve'
         
-        retry_count = 0
-        last_error = None
+        # Find the source element
+        source = unit.find('xliff:source', self.NS)
+        if source is None:
+            return None
         
-        while retry_count <= max_retries:
-            try:
-                # Build the prompt
-                prompt = self._build_prompt(
-                    text=text,
-                    target_language=target_language,
-                    has_seg_markers=has_seg_markers,
-                    preserve_terms=preserve_terms
-                )
-                
-                # Call OpenAI API
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": "You are a professional translator specializing in UI and e-learning content. You follow instructions precisely and preserve all formatting markers."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.3,  # Lower temperature for more consistent translations
-                    max_tokens=2000
-                )
-                
-                translated_text = response.choices[0].message.content.strip()
-                
-                # Validate the translation
-                is_valid, error = self._validate_translation(
-                    original=text,
-                    translated=translated_text,
-                    has_seg_markers=has_seg_markers
-                )
-                
-                if is_valid:
-                    self.stats['total_translations'] += 1
-                    self.stats['successful'] += 1
-                    if retry_count > 0:
-                        self.stats['retries'] += retry_count
-                    
-                    return TranslationResult(
-                        success=True,
-                        translated_text=translated_text,
-                        original_text=text,
-                        unit_id=unit_id,
-                        retry_count=retry_count
-                    )
-                else:
-                    # Validation failed, retry with stricter prompt
-                    last_error = f"Validation failed: {error}"
-                    retry_count += 1
-                    if retry_count <= max_retries:
-                        print(f"⚠️  Retry {retry_count}/{max_retries} for unit {unit_id}: {error}")
-                        time.sleep(1)  # Brief delay before retry
-                    
-            except Exception as e:
-                last_error = str(e)
-                retry_count += 1
-                if retry_count <= max_retries:
-                    print(f"⚠️  API error, retry {retry_count}/{max_retries} for unit {unit_id}: {e}")
-                    time.sleep(2)  # Longer delay for API errors
+        # Route to appropriate parser based on datatype
+        if datatype == 'plaintext':
+            return self._parse_plaintext_unit(unit_id, source, preserve_space)
+        elif datatype == 'x-DocumentState':
+            return self._parse_document_state_unit(unit_id, source, preserve_space)
+        else:
+            # Fallback: treat as plaintext
+            return self._parse_plaintext_unit(unit_id, source, preserve_space)
+    
+    def _parse_plaintext_unit(self, unit_id: str, source: etree._Element, 
+                              preserve_space: bool) -> TransUnit:
+        """
+        Parse a simple plaintext trans-unit
         
-        # All retries exhausted
-        self.stats['total_translations'] += 1
-        self.stats['failed'] += 1
+        These have no inline tags, just plain text content
+        """
+        text = source.text or ''
         
-        return TranslationResult(
-            success=False,
-            translated_text=text,  # Return original as fallback
-            original_text=text,
-            unit_id=unit_id,
-            error_message=f"Translation failed after {max_retries} retries: {last_error}",
-            retry_count=retry_count
+        return TransUnit(
+            id=unit_id,
+            datatype='plaintext',
+            source_element=source,
+            translatable_text=text.strip() if not preserve_space else text,
+            has_inline_tags=False,
+            xml_space_preserve=preserve_space,
+            tag_map={},
+            g_segments=[]
         )
     
-    def translate_batch(self,
-                       units: List[Dict],
-                       target_language: str,
-                       preserve_terms: Optional[List[str]] = None) -> List[TranslationResult]:
+    def _parse_document_state_unit(self, unit_id: str, source: etree._Element,
+                                   preserve_space: bool) -> TransUnit:
         """
-        Translate multiple units
+        Parse a complex x-DocumentState trans-unit
         
-        Args:
-            units: List of dicts with keys: 'text', 'id', 'has_seg_markers'
-            target_language: Target language
-            preserve_terms: Terms to preserve across all units
-            
-        Returns:
-            List of TranslationResult objects
+        These contain inline formatting tags. Only <g ctype="x-text"> elements
+        contain translatable content. We need to:
+        1. Extract all <g ctype="x-text"> segments
+        2. Merge them into a single translatable string
+        3. Keep track of boundaries for splitting after translation
         """
-        results = []
+        # Find all <g> tags with translatable content
+        g_tags = source.findall('.//xliff:g[@ctype="x-text"]', self.NS)
         
-        for i, unit in enumerate(units):
-            print(f"Translating {i+1}/{len(units)}: {unit['id']}")
-            
-            result = self.translate_unit(
-                text=unit['text'],
-                unit_id=unit['id'],
-                target_language=target_language,
-                has_seg_markers=unit.get('has_seg_markers', False),
-                preserve_terms=preserve_terms
+        if not g_tags:
+            # No translatable content
+            return TransUnit(
+                id=unit_id,
+                datatype='x-DocumentState',
+                source_element=source,
+                translatable_text='',
+                has_inline_tags=True,
+                xml_space_preserve=preserve_space,
+                tag_map={},
+                g_segments=[]
             )
+        
+        # Extract text and metadata from each <g> segment
+        g_segments = []
+        text_parts = []
+        
+        for idx, g_tag in enumerate(g_tags):
+            text = g_tag.text or ''
             
-            results.append(result)
+            # Handle &#xD; (carriage return) and other XML entities
+            if preserve_space:
+                # Keep whitespace as-is
+                clean_text = text
+            else:
+                # Normalize whitespace but preserve intentional breaks
+                clean_text = re.sub(r'\s+', ' ', text).strip()
             
-            # Brief pause to avoid rate limits (adjust as needed)
-            if i < len(units) - 1:
-                time.sleep(0.5)
+            g_segments.append({
+                'index': idx,
+                'element': g_tag,
+                'original_text': text,
+                'char_count': len(clean_text)
+            })
+            
+            text_parts.append(clean_text)
         
-        return results
+        # Merge all text segments with a separator
+        # Use a special marker to track segment boundaries
+        merged_text = ' __SEG__ '.join(text_parts)
+        
+        return TransUnit(
+            id=unit_id,
+            datatype='x-DocumentState',
+            source_element=source,
+            translatable_text=merged_text,
+            has_inline_tags=True,
+            xml_space_preserve=preserve_space,
+            tag_map={},
+            g_segments=g_segments
+        )
     
-    def _build_prompt(self,
-                     text: str,
-                     target_language: str,
-                     has_seg_markers: bool,
-                     preserve_terms: Optional[List[str]]) -> str:
-        """Build the translation prompt"""
-        
-        prompt_parts = [
-            f"Translate the following text from English to {target_language}.",
-            "",
-            "CRITICAL RULES:"
-        ]
-        
-        if has_seg_markers:
-            prompt_parts.extend([
-                "1. The text contains __SEG__ markers. These are STRUCTURAL MARKERS.",
-                "   - You MUST preserve EVERY __SEG__ marker EXACTLY as-is",
-                "   - Do NOT translate, modify, move, or remove __SEG__ markers",
-                "   - Keep __SEG__ in the EXACT SAME POSITIONS in the translation",
-                ""
-            ])
-        
-        if preserve_terms:
-            terms_str = ", ".join(f'"{term}"' for term in preserve_terms)
-            prompt_parts.extend([
-                f"2. Do NOT translate these brand/product names: {terms_str}",
-                "   - Keep them exactly as written in the source text",
-                ""
-            ])
-        
-        prompt_parts.extend([
-            "3. Preserve the tone and style:",
-            "   - This is UI text for an interactive learning module",
-            "   - Keep it natural, friendly, and engaging",
-            "   - Maintain any formatting like line breaks",
-            "",
-            "4. OUTPUT FORMAT:",
-            "   - Provide ONLY the translated text",
-            "   - No explanations, no notes, no markdown formatting",
-            "   - Just the pure translation",
-            "",
-            "TEXT TO TRANSLATE:",
-            text
-        ])
-        
-        return "\n".join(prompt_parts)
-    
-    def _validate_translation(self,
-                            original: str,
-                            translated: str,
-                            has_seg_markers: bool) -> tuple[bool, str]:
+    def validate_tag_pairing(self, source: etree._Element) -> Tuple[bool, str]:
         """
-        Validate the translation output
+        Validate that all <bpt> and <ept> tags are properly paired
         
         Returns:
             (is_valid, error_message)
         """
-        # Check if translation is suspiciously similar (might be untranslated)
-        if original == translated and len(original) > 10:
-            return False, "Translation appears identical to source"
+        bpt_tags = source.findall('.//xliff:bpt', self.NS)
+        ept_tags = source.findall('.//xliff:ept', self.NS)
         
-        # Validate __SEG__ marker preservation
-        if has_seg_markers:
-            original_count = original.count('__SEG__')
-            translated_count = translated.count('__SEG__')
-            
-            if original_count != translated_count:
-                return False, f"__SEG__ marker count mismatch: expected {original_count}, got {translated_count}"
+        bpt_ids = {tag.get('id') for tag in bpt_tags}
+        ept_ids = {tag.get('id') for tag in ept_tags}
         
-        # Check for common API errors
-        if "I cannot" in translated or "I apologize" in translated:
-            return False, "Translation contains refusal language"
+        if bpt_ids != ept_ids:
+            missing_epts = bpt_ids - ept_ids
+            missing_bpts = ept_ids - bpt_ids
+            error_parts = []
+            if missing_epts:
+                error_parts.append(f"Missing <ept> for: {missing_epts}")
+            if missing_bpts:
+                error_parts.append(f"Missing <bpt> for: {missing_bpts}")
+            return False, '; '.join(error_parts)
         
         return True, ""
     
     def get_statistics(self) -> Dict:
-        """Get translation statistics"""
+        """
+        Get statistics about the XLF file
+        
+        Returns:
+            Dictionary with counts and metadata
+        """
+        units = self.parse_all_units()
+        
+        plaintext_count = sum(1 for u in units if u.datatype == 'plaintext')
+        styled_count = sum(1 for u in units if u.datatype == 'x-DocumentState')
+        
+        total_chars = sum(len(u.translatable_text) for u in units)
+        avg_chars = total_chars / len(units) if units else 0
+        
         return {
-            **self.stats,
-            'success_rate': round(self.stats['successful'] / self.stats['total_translations'] * 100, 2) 
-                           if self.stats['total_translations'] > 0 else 0
+            'total_units': len(units),
+            'plaintext_units': plaintext_count,
+            'styled_units': styled_count,
+            'total_characters': total_chars,
+            'avg_characters_per_unit': round(avg_chars, 2),
+            'source_language': self.get_source_language(),
+            'target_language': self.get_target_language() or 'not specified'
         }
 
 
 def main():
-    """Example usage"""
+    """Example usage and testing"""
     import sys
     
-    # Check for API key
-    if not os.getenv('OPENAI_API_KEY'):
-        print("Error: OPENAI_API_KEY environment variable not set")
-        print("Set it with: export OPENAI_API_KEY='your-key-here'")
+    if len(sys.argv) < 2:
+        print("Usage: python parser.py <xlf_file>")
         sys.exit(1)
     
-    # Initialize translator
-    translator = XLFTranslator()
+    xlf_file = sys.argv[1]
     
-    # Example: Translate a simple unit
-    print("=== Example 1: Simple Translation ===")
-    result = translator.translate_unit(
-        text="5 Days of Pixel",
-        unit_id="test1",
-        target_language="Spanish",
-        preserve_terms=["Pixel"]
-    )
-    print(f"Success: {result.success}")
-    print(f"Original: {result.original_text}")
-    print(f"Translated: {result.translated_text}")
-    print()
-    
-    # Example: Translate unit with __SEG__ markers
-    print("=== Example 2: Multi-Segment Translation ===")
-    result = translator.translate_unit(
-        text="The Pixelves have almost finished __SEG__ their yearly duties __SEG__ of delivering presents",
-        unit_id="test2",
-        target_language="Spanish",
-        has_seg_markers=True,
-        preserve_terms=["Pixelves"]
-    )
-    print(f"Success: {result.success}")
-    print(f"Original: {result.original_text}")
-    print(f"Translated: {result.translated_text}")
-    print()
+    # Parse the file
+    parser = XLFParser(xlf_file)
     
     # Show statistics
-    print("=== Translation Statistics ===")
-    stats = translator.get_statistics()
+    stats = parser.get_statistics()
+    print("\n=== XLF File Statistics ===")
     for key, value in stats.items():
         print(f"{key}: {value}")
+    
+    # Parse all units
+    units = parser.parse_all_units()
+    
+    # Show first 5 units as examples
+    print("\n=== Sample Translation Units ===")
+    for unit in units[:5]:
+        print(f"\nID: {unit.id}")
+        print(f"Type: {unit.datatype}")
+        print(f"Has inline tags: {unit.has_inline_tags}")
+        print(f"Preserve space: {unit.xml_space_preserve}")
+        print(f"Text: {unit.translatable_text[:100]}..." if len(unit.translatable_text) > 100 
+              else f"Text: {unit.translatable_text}")
+        if unit.g_segments:
+            print(f"Number of <g> segments: {len(unit.g_segments)}")
+        print("-" * 50)
+    
+    # Validation example
+    print("\n=== Validation Check ===")
+    all_valid = True
+    for unit in units:
+        if unit.has_inline_tags:
+            is_valid, error = parser.validate_tag_pairing(unit.source_element)
+            if not is_valid:
+                print(f"⚠️  Unit {unit.id}: {error}")
+                all_valid = False
+    
+    if all_valid:
+        print("✅ All tags properly paired!")
 
 
 if __name__ == '__main__':
