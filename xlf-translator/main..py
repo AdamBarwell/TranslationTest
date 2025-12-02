@@ -182,22 +182,61 @@ def confirm_translation() -> bool:
             print("L Please enter 'yes' or 'no'.")
 
 
-def get_translation_context() -> str:
+
+def get_target_language() -> str:
     """
-    Get additional context/prompt rules from user for translation
+    Ask user for target language
 
     Returns:
-        Context string to add to translation prompts
+        Target language string
     """
-    print_header("Translation Context / Prompt Rules")
+    print_header("Target Language Selection")
+    print("Source language: EN-UK (English - United Kingdom)")
+    print()
+    while True:
+        lang = input("Enter target language (e.g., Spanish, French, de-DE, fr-FR): ").strip()
+        if lang:
+            print(f"\n✅ Target language set to: {lang}")
+            return lang
+        print("❌ Please enter a target language.")
 
+
+def get_translation_parameters() -> tuple:
+    """
+    Get all translation parameters: terms to preserve and custom context
+
+    Returns:
+        Tuple of (preserve_terms, context)
+    """
+    print_header("Translation Parameters & Context")
+
+    # Step 1: Terms to preserve
+    print("STEP 1: Terms to Preserve")
+    print("Enter any brand names, product names, or terms that should NOT be translated.")
+    print("Examples: Pixel, MbG, Google, etc.")
+    print()
+    terms_input = input("Enter terms to preserve (comma-separated, or press Enter to skip): ").strip()
+
+    preserve_terms = None
+    if terms_input:
+        preserve_terms = [term.strip() for term in terms_input.split(',')]
+        preserve_terms = [term for term in preserve_terms if term]
+        if preserve_terms:
+            print(f"\nWill preserve: {', '.join(preserve_terms)}")
+    else:
+        print("\nNo terms to preserve")
+
+    print("\n" + "-" * 70 + "\n")
+
+    # Step 2: Custom context/rules
+    print("STEP 2: Additional Context & Rules")
     print("Enter any additional context or rules for the translation.")
     print("This will be added to the GPT-4o prompt for better accuracy.")
     print()
     print("Examples:")
-    print("  • 'This is a training module for healthcare professionals'")
-    print("  • 'Use formal tone, avoid colloquialisms'")
-    print("  • 'Preserve brand names: Pixel, MbG'")
+    print("  - 'This is a training module for healthcare professionals'")
+    print("  - 'Use formal tone, avoid colloquialisms'")
+    print("  - 'Target audience is enterprise customers'")
     print()
     print("Enter your context (or press Enter to skip):")
     print("-" * 70)
@@ -218,65 +257,108 @@ def get_translation_context() -> str:
     context = "\n".join(lines).strip()
 
     if context:
-        print(f"\n Context saved ({len(context)} characters)")
+        print(f"\nContext saved ({len(context)} characters)")
     else:
-        print("\n=� No additional context provided")
+        print("\nNo additional context provided")
 
-    return context
+    return preserve_terms, context
 
 
-def get_target_language() -> str:
+def validate_translation_structure(parser: XLFParser, results: List, original_units: List) -> bool:
     """
-    Ask user for target language
+    Validate that translated content maintains source file structure
+
+    Args:
+        parser: XLFParser instance
+        results: List of TranslationResult objects
+        original_units: List of original TransUnit objects
 
     Returns:
-        Target language string
+        True if validation passes, False otherwise
     """
+    print_header("Validating Translation Structure")
+
+    validation_passed = True
+    issues = []
+
+    # Check 1: Count matches
+    successful_results = [r for r in results if r.success]
+    if len(successful_results) != len(original_units):
+        issues.append(f"Unit count mismatch: {len(successful_results)} translated vs {len(original_units)} original")
+        validation_passed = False
+
+    # Check 2: Validate each translation
+    result_map = {r.unit_id: r for r in results if r.success}
+
+    for unit in original_units:
+        if unit.id not in result_map:
+            continue
+
+        result = result_map[unit.id]
+        original_text = unit.translatable_text
+        translated_text = result.translated_text
+
+        # Check __SEG__ markers preservation
+        if '__SEG__' in original_text:
+            original_seg_count = original_text.count('__SEG__')
+            translated_seg_count = translated_text.count('__SEG__')
+
+            if original_seg_count != translated_seg_count:
+                issues.append(f"Unit {unit.id}: __SEG__ marker mismatch ({original_seg_count} -> {translated_seg_count})")
+                validation_passed = False
+
+        # Check for empty translations
+        if not translated_text.strip() and original_text.strip():
+            issues.append(f"Unit {unit.id}: Empty translation for non-empty source")
+            validation_passed = False
+
+        # Check length discrepancy (warn if translation is >300% or <20% of original)
+        if len(original_text) > 10:  # Only check for non-trivial text
+            ratio = len(translated_text) / len(original_text)
+            if ratio > 3.0:
+                issues.append(f"Unit {unit.id}: Translation suspiciously long ({ratio:.1f}x original)")
+            elif ratio < 0.2:
+                issues.append(f"Unit {unit.id}: Translation suspiciously short ({ratio:.1f}x original)")
+
+    # Display results
+    if validation_passed and not issues:
+        print("All structure validations passed!")
+        print(f"  - {len(successful_results)} units validated")
+        print("  - All __SEG__ markers preserved")
+        print("  - No structural issues detected")
+    else:
+        if not validation_passed:
+            print("CRITICAL ISSUES DETECTED:")
+        else:
+            print("WARNINGS (not blocking):")
+
+        for issue in issues[:10]:  # Show first 10 issues
+            print(f"  - {issue}")
+
+        if len(issues) > 10:
+            print(f"  ... and {len(issues) - 10} more issues")
+
     print()
-    while True:
-        lang = input("Enter target language (e.g., Spanish, French, es, fr): ").strip()
-        if lang:
-            return lang
-        print("L Please enter a target language.")
-
-
-def get_preserve_terms() -> Optional[List[str]]:
-    """
-    Ask user for terms to preserve (not translate)
-
-    Returns:
-        List of terms or None
-    """
-    print()
-    terms_input = input("Enter terms to preserve (comma-separated, or press Enter to skip): ").strip()
-
-    if not terms_input:
-        return None
-
-    terms = [term.strip() for term in terms_input.split(',')]
-    terms = [term for term in terms if term]  # Remove empty strings
-
-    if terms:
-        print(f" Will preserve: {', '.join(terms)}")
-        return terms
-
-    return None
+    return validation_passed
 
 
 def perform_translation(parser: XLFParser,
                        file_path: Path,
                        target_language: str,
                        preserve_terms: Optional[List[str]],
-                       context: str):
+                       context: str) -> bool:
     """
     Perform the actual translation
 
     Args:
         parser: XLFParser instance with parsed file
         file_path: Original file path
-        target_language: Target language for translation
+        target_language: Target language for translation (e.g., 'es', 'fr-FR', 'Spanish')
         preserve_terms: Terms to not translate
         context: Additional context for translation
+
+    Returns:
+        True if translation and save successful, False otherwise
     """
     print_header("Starting Translation")
 
@@ -287,7 +369,7 @@ def perform_translation(parser: XLFParser,
         print()
         print("To set your API key:")
         print("  export OPENAI_API_KEY='your-key-here'")
-        return
+        return False
 
     # Initialize translator
     print("=' Initializing translator (GPT-4o)...")
@@ -295,7 +377,7 @@ def perform_translation(parser: XLFParser,
         translator = XLFTranslator(api_key=api_key, model="gpt-4o")
     except Exception as e:
         print(f"L Error initializing translator: {e}")
-        return
+        return False
 
     # Parse units
     units = parser.parse_all_units()
@@ -346,6 +428,18 @@ def perform_translation(parser: XLFParser,
         if len(failed_results) > 5:
             print(f"   ... and {len(failed_results) - 5} more")
 
+    # Validate translation structure
+    print()
+    validation_passed = validate_translation_structure(
+        parser=parser,
+        results=results,
+        original_units=[unit_dict['unit_obj'] for unit_dict in translation_units]
+    )
+
+    if not validation_passed:
+        print("WARNING: Validation detected critical issues!")
+        print("You may still save the file, but review it carefully.")
+
     # Ask if user wants to save
     print()
     while True:
@@ -354,7 +448,7 @@ def perform_translation(parser: XLFParser,
             break
         elif save in ['no', 'n']:
             print("L Translation not saved.")
-            return
+            return False
         else:
             print("L Please enter 'yes' or 'no'.")
 
@@ -379,8 +473,10 @@ def perform_translation(parser: XLFParser,
         print(f"\n Translation saved to: {output_path}")
         print(f"=� File size: {output_path.stat().st_size / 1024:.2f} KB")
 
+        return True
     except Exception as e:
         print(f"L Error saving file: {e}")
+        return False
 
 
 def main():
@@ -402,23 +498,24 @@ def main():
             print("\n=K Goodbye!")
             return
 
-        # Step 2: Parse and confirm
+        # Step 2: Get target language (source is always EN-UK)
+        target_language = get_target_language()
+
+        # Step 3: Parse and confirm
         parser = parse_and_confirm(selected_file)
         if not parser:
             print("\nL Failed to parse file. Exiting.")
             return
 
-        # Step 3: Confirm translation
+        # Step 4: Confirm translation
         if not confirm_translation():
             print("\n=K Translation cancelled. Goodbye!")
             return
 
-        # Step 4: Get translation parameters
-        target_language = get_target_language()
-        preserve_terms = get_preserve_terms()
-        context = get_translation_context()
+        # Step 5: Get translation parameters (terms to preserve + context)
+        preserve_terms, context = get_translation_parameters()
 
-        # Step 5: Perform translation
+        # Step 6: Perform translation with validation
         perform_translation(
             parser=parser,
             file_path=selected_file,

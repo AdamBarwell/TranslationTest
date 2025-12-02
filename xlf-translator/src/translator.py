@@ -213,7 +213,7 @@ class XLFTranslator:
         """Build the translation prompt"""
         
         prompt_parts = [
-            f"Translate the following text from English to {target_language}.",
+            f"Translate the following text from English (EN-UK) to {target_language}.",
             ""
         ]
 
