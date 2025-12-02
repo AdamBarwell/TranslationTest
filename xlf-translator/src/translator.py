@@ -58,24 +58,26 @@ class XLFTranslator:
             'retries': 0
         }
     
-    def translate_unit(self, 
-                      text: str, 
+    def translate_unit(self,
+                      text: str,
                       unit_id: str,
                       target_language: str,
                       has_seg_markers: bool = False,
                       preserve_terms: Optional[List[str]] = None,
+                      custom_context: Optional[str] = None,
                       max_retries: int = 2) -> TranslationResult:
         """
         Translate a single unit
-        
+
         Args:
             text: Text to translate
             unit_id: Unit ID for tracking
             target_language: Target language code or name (e.g., 'es', 'Spanish', 'fr')
             has_seg_markers: Whether text contains __SEG__ markers
             preserve_terms: List of terms to not translate (e.g., brand names)
+            custom_context: Additional context/rules to include in the prompt
             max_retries: Maximum retry attempts
-            
+
         Returns:
             TranslationResult object
         """
@@ -98,7 +100,8 @@ class XLFTranslator:
                     text=text,
                     target_language=target_language,
                     has_seg_markers=has_seg_markers,
-                    preserve_terms=preserve_terms
+                    preserve_terms=preserve_terms,
+                    custom_context=custom_context
                 )
                 
                 # Call OpenAI API
@@ -165,15 +168,17 @@ class XLFTranslator:
     def translate_batch(self,
                        units: List[Dict],
                        target_language: str,
-                       preserve_terms: Optional[List[str]] = None) -> List[TranslationResult]:
+                       preserve_terms: Optional[List[str]] = None,
+                       custom_context: Optional[str] = None) -> List[TranslationResult]:
         """
         Translate multiple units
-        
+
         Args:
             units: List of dicts with keys: 'text', 'id', 'has_seg_markers'
             target_language: Target language
             preserve_terms: Terms to preserve across all units
-            
+            custom_context: Additional context/rules to include in prompts
+
         Returns:
             List of TranslationResult objects
         """
@@ -187,7 +192,8 @@ class XLFTranslator:
                 unit_id=unit['id'],
                 target_language=target_language,
                 has_seg_markers=unit.get('has_seg_markers', False),
-                preserve_terms=preserve_terms
+                preserve_terms=preserve_terms,
+                custom_context=custom_context
             )
             
             results.append(result)
@@ -202,14 +208,24 @@ class XLFTranslator:
                      text: str,
                      target_language: str,
                      has_seg_markers: bool,
-                     preserve_terms: Optional[List[str]]) -> str:
+                     preserve_terms: Optional[List[str]],
+                     custom_context: Optional[str] = None) -> str:
         """Build the translation prompt"""
         
         prompt_parts = [
             f"Translate the following text from English to {target_language}.",
-            "",
-            "CRITICAL RULES:"
+            ""
         ]
+
+        # Add custom context if provided
+        if custom_context:
+            prompt_parts.extend([
+                "CONTEXT:",
+                custom_context,
+                ""
+            ])
+
+        prompt_parts.append("CRITICAL RULES:")
         
         if has_seg_markers:
             prompt_parts.extend([
