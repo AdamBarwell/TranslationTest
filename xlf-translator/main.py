@@ -41,13 +41,13 @@ def list_xlf_files(data_dir: str = "data") -> List[Path]:
     data_path = Path(data_dir)
 
     if not data_path.exists():
-        print(f"L Error: Data directory '{data_dir}' not found!")
+        print(f"❌ Error: Data directory '{data_dir}' not found!")
         return []
 
     xlf_files = list(data_path.glob("*.xlf"))
 
     if not xlf_files:
-        print(f"L No XLF files found in '{data_dir}' directory!")
+        print(f"❌ No XLF files found in '{data_dir}' directory!")
         return []
 
     return sorted(xlf_files)
@@ -84,11 +84,11 @@ def select_file(xlf_files: List[Path]) -> Optional[Path]:
             if 0 <= file_idx < len(xlf_files):
                 return xlf_files[file_idx]
             else:
-                print(f"L Invalid selection. Please enter a number between 1 and {len(xlf_files)}.")
+                print(f"❌ Invalid selection. Please enter a number between 1 and {len(xlf_files)}.")
         except ValueError:
-            print("L Invalid input. Please enter a number or 'q' to quit.")
+            print("❌ Invalid input. Please enter a number or 'q' to quit.")
         except KeyboardInterrupt:
-            print("\n\nL Cancelled by user.")
+            print("\n\n❌ Cancelled by user.")
             return None
 
 
@@ -113,7 +113,7 @@ def parse_and_confirm(file_path: Path) -> Optional[XLFParser]:
         units = parser.parse_all_units()
 
         # Display statistics
-        print("=� File Statistics:")
+        print("📊 File Statistics:")
         print(f"   • Total translation units: {stats['total_units']}")
         print(f"   • Plaintext units: {stats['plaintext_units']}")
         print(f"   • Styled units (with formatting): {stats['styled_units']}")
@@ -124,7 +124,7 @@ def parse_and_confirm(file_path: Path) -> Optional[XLFParser]:
         print()
 
         # Show sample units
-        print("=� Sample Translation Units (first 3):")
+        print("📝 Sample Translation Units (first 3):")
         print("-" * 70)
         for unit in units[:3]:
             print(f"\n   ID: {unit.id}")
@@ -145,7 +145,7 @@ def parse_and_confirm(file_path: Path) -> Optional[XLFParser]:
                     validation_errors.append(f"Unit {unit.id}: {error}")
 
         if validation_errors:
-            print("�  Validation warnings:")
+            print("⚠️  Validation warnings:")
             for error in validation_errors[:5]:  # Show first 5 errors
                 print(f"   • {error}")
             if len(validation_errors) > 5:
@@ -158,7 +158,7 @@ def parse_and_confirm(file_path: Path) -> Optional[XLFParser]:
         return parser
 
     except Exception as e:
-        print(f"L Error parsing file: {e}")
+        print(f"❌ Error parsing file: {e}")
         return None
 
 
@@ -179,7 +179,7 @@ def confirm_translation() -> bool:
         elif choice in ['no', 'n']:
             return False
         else:
-            print("L Please enter 'yes' or 'no'.")
+            print("❌ Please enter 'yes' or 'no'.")
 
 
 
@@ -365,23 +365,23 @@ def perform_translation(parser: XLFParser,
     # Check for API key
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
-        print("L Error: OPENAI_API_KEY environment variable not set!")
+        print("❌ Error: OPENAI_API_KEY environment variable not set!")
         print()
         print("To set your API key:")
         print("  export OPENAI_API_KEY='your-key-here'")
         return False
 
     # Initialize translator
-    print("=' Initializing translator (GPT-4o)...")
+    print("🔄 Initializing translator (GPT-4o)...")
     try:
         translator = XLFTranslator(api_key=api_key, model="gpt-4o")
     except Exception as e:
-        print(f"L Error initializing translator: {e}")
+        print(f"❌ Error initializing translator: {e}")
         return False
 
     # Parse units
     units = parser.parse_all_units()
-    print(f"=� Found {len(units)} units to translate")
+    print(f"📊 Found {len(units)} units to translate")
     print()
 
     # Prepare units for translation
@@ -415,14 +415,14 @@ def perform_translation(parser: XLFParser,
 
     stats = translator.get_statistics()
     print(f" Successful: {stats['successful']}")
-    print(f"L Failed: {stats['failed']}")
-    print(f"> Retries: {stats['retries']}")
-    print(f"=� Success rate: {stats['success_rate']}%")
+    print(f"❌ Failed: {stats['failed']}")
+    print(f"🔄 Retries: {stats['retries']}")
+    print(f"📊 Success rate: {stats['success_rate']}%")
 
     # Show failed translations
     failed_results = [r for r in results if not r.success]
     if failed_results:
-        print(f"\n�  Failed translations:")
+        print(f"\n⚠️  Failed translations:")
         for result in failed_results[:5]:
             print(f"   • {result.unit_id}: {result.error_message}")
         if len(failed_results) > 5:
@@ -447,10 +447,10 @@ def perform_translation(parser: XLFParser,
         if save in ['yes', 'y']:
             break
         elif save in ['no', 'n']:
-            print("L Translation not saved.")
+            print("❌ Translation not saved.")
             return False
         else:
-            print("L Please enter 'yes' or 'no'.")
+            print("❌ Please enter 'yes' or 'no'.")
 
     # Write output file
     output_path = file_path.parent / f"{file_path.stem}_translated.xlf"
@@ -471,7 +471,7 @@ def perform_translation(parser: XLFParser,
         writer.save(str(output_path))
 
         print(f"\n Translation saved to: {output_path}")
-        print(f"=� File size: {output_path.stat().st_size / 1024:.2f} KB")
+        print(f"📊 File size: {output_path.stat().st_size / 1024:.2f} KB")
 
         # CRITICAL: Validate output file for __SEG__ markers
         print_header("Final Validation")
@@ -505,7 +505,7 @@ def perform_translation(parser: XLFParser,
 
         return True
     except Exception as e:
-        print(f"L Error saving file: {e}")
+        print(f"❌ Error saving file: {e}")
         return False
 
 
