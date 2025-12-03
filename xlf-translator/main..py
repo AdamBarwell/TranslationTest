@@ -473,6 +473,36 @@ def perform_translation(parser: XLFParser,
         print(f"\n Translation saved to: {output_path}")
         print(f"=� File size: {output_path.stat().st_size / 1024:.2f} KB")
 
+        # CRITICAL: Validate output file for __SEG__ markers
+        print_header("Final Validation")
+        validation = writer.validate_output(str(output_path))
+
+        if validation['total_seg_markers'] > 0:
+            print(f"\nCRITICAL ERROR: Found {validation['total_seg_markers']} __SEG__ markers in output!")
+            print("These will appear as literal text in Storyline!")
+            print("\nProblem units:")
+            for issue in validation['issues']['seg_markers'][:5]:
+                print(f"  - {issue['unit_id']}: {issue['count']} markers")
+                print(f"    Preview: {issue['preview']}...")
+            print("\nDO NOT IMPORT THIS FILE TO STORYLINE!")
+            print("Please report this as a bug.")
+            return False
+
+        if validation['issues']['tag_mismatches']:
+            print(f"\nWarning: {len(validation['issues']['tag_mismatches'])} units with tag mismatches")
+            for issue in validation['issues']['tag_mismatches'][:3]:
+                print(f"  - {issue['unit_id']}: {issue['source_tags']} -> {issue['target_tags']} <g> tags")
+
+        if validation['issues']['empty_targets']:
+            print(f"\nWarning: {len(validation['issues']['empty_targets'])} units have empty translations")
+
+        if validation['is_valid']:
+            print("\nValidation PASSED!")
+            print("  - No __SEG__ markers found")
+            print("  - File is safe to import to Storyline")
+        else:
+            print("\nValidation completed with warnings")
+
         return True
     except Exception as e:
         print(f"L Error saving file: {e}")
