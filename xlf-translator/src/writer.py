@@ -279,7 +279,7 @@ class XLFWriter:
             'modified_units': self.modified_count
         }
 
-    def validate_output(self, output_path: str) -> Dict:
+    def validate_output(self, output_path: str) -> dict:
         """
         Validate the output XLF file for common issues
 
