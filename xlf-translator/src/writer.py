@@ -183,6 +183,82 @@ class XLFWriter:
             'modified_units': self.modified_count
         }
 
+    def validate_output(self, output_path: str) -> Dict:
+        """
+        Validate the output XLF file for common issues
+
+        CRITICAL: This checks that NO __SEG__ markers remain!
+
+        Args:
+            output_path: Path to the output XLF file
+
+        Returns:
+            Dict with validation results and issues found
+        """
+        from lxml import etree
+
+        tree = etree.parse(output_path)
+        NS = {'xliff': 'urn:oasis:names:tc:xliff:document:1.2'}
+
+        issues = {
+            'seg_markers': [],      # CRITICAL: Should be empty!
+            'empty_targets': [],
+            'tag_mismatches': [],
+            'missing_targets': []
+        }
+
+        # Check all trans-units
+        for unit in tree.findall('.//xliff:trans-unit', NS):
+            unit_id = unit.get('id')
+            source = unit.find('xliff:source', NS)
+            target = unit.find('xliff:target', NS)
+
+            # Check for missing target
+            if target is None:
+                issues['missing_targets'].append(unit_id)
+                continue
+
+            # Get all text from target
+            target_text = ''.join(target.itertext())
+
+            # CRITICAL CHECK: Look for __SEG__ markers
+            if '__SEG__' in target_text:
+                seg_count = target_text.count('__SEG__')
+                issues['seg_markers'].append({
+                    'unit_id': unit_id,
+                    'count': seg_count,
+                    'preview': target_text[:100]
+                })
+
+            # Check for empty targets
+            if not target_text.strip():
+                issues['empty_targets'].append(unit_id)
+
+            # Check tag structure matches source
+            if source is not None:
+                source_g_count = len(source.findall('.//xliff:g[@ctype="x-text"]', NS))
+                target_g_count = len(target.findall('.//xliff:g[@ctype="x-text"]', NS))
+
+                if source_g_count != target_g_count and source_g_count > 0:
+                    issues['tag_mismatches'].append({
+                        'unit_id': unit_id,
+                        'source_tags': source_g_count,
+                        'target_tags': target_g_count
+                    })
+
+        # Calculate validity
+        is_valid = (
+            len(issues['seg_markers']) == 0 and  # NO __SEG__ markers!
+            len(issues['tag_mismatches']) < 5      # Some mismatches are OK
+        )
+
+        return {
+            'is_valid': is_valid,
+            'issues': issues,
+            'total_seg_markers': len(issues['seg_markers']),
+            'total_issues': sum(len(v) if isinstance(v, list) else 0 for v in issues.values())
+        }
+
 
 def main():
     """Example usage"""
