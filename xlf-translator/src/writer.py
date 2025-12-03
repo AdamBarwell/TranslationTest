@@ -93,6 +93,7 @@ class XLFWriter:
         - Markers at string boundaries
         - Empty segments
         - Mismatched segment counts
+        - Whitespace preservation from source
 
         Args:
             target_elem: The <target> element to write to
@@ -132,16 +133,18 @@ class XLFWriter:
                 raw_segments = translated_text.split('__SEG__')
 
             # Step 2: Clean each segment
-            # - Strip whitespace
             # - Remove any remaining __SEG__ markers (in case they're in the middle)
-            # - Remove empty segments
+            # - DO NOT strip whitespace yet - we'll preserve it from source later
             cleaned_segments = []
             for seg in raw_segments:
-                cleaned = seg.strip()
-                # Remove any __SEG__ that might still be in the text
-                cleaned = cleaned.replace('__SEG__', '').strip()
-                if cleaned:  # Only keep non-empty segments
+                # Remove __SEG__ markers but preserve whitespace for now
+                cleaned = seg.replace('__SEG__', '')
+                # Only filter out completely empty segments
+                if cleaned or cleaned == '':  # Keep even whitespace-only segments
                     cleaned_segments.append(cleaned)
+
+            # Remove truly empty segments (but keep whitespace-only ones)
+            cleaned_segments = [s for s in cleaned_segments if s is not None]
 
             # Step 3: Handle segment count mismatch
             if len(cleaned_segments) != expected_segments:
@@ -168,13 +171,20 @@ class XLFWriter:
 
                     print(f"         → Result: {len(cleaned_segments)} segments")
 
-            # Step 4: Update <g> tag text content with cleaned segments
+            # Step 4: Update <g> tag text content with whitespace preservation
             target_g_tags = target_elem.findall('.//xliff:g[@ctype="x-text"]', self.NS)
 
-            for g_tag, segment_text in zip(target_g_tags, cleaned_segments):
-                # FINAL SAFETY CHECK: Remove any remaining __SEG__
-                final_text = segment_text.replace('__SEG__', '').strip()
-                g_tag.text = final_text
+            for source_g, target_g, segment_text in zip(source_g_tags, target_g_tags, cleaned_segments):
+                # Remove any remaining __SEG__ markers
+                segment_text = segment_text.replace('__SEG__', '')
+
+                # CRITICAL: Preserve whitespace patterns from source
+                final_text = self._preserve_whitespace(
+                    source_text=source_g.text or '',
+                    target_text=segment_text
+                )
+
+                target_g.text = final_text
         else:
             # No g_segments, just copy structure
             pass
@@ -205,6 +215,56 @@ class XLFWriter:
             new_elem.append(self._deep_copy_element(child))
 
         return new_elem
+
+    def _preserve_whitespace(self, source_text: str, target_text: str) -> str:
+        """
+        Preserve leading and trailing whitespace from source in target text
+
+        This is CRITICAL for Storyline XLF files because:
+        - Differently styled segments are in separate <g> tags
+        - Storyline doesn't add spacing between adjacent <g> tags
+        - Missing spaces cause text to run together visually
+
+        Example:
+            Source: "into " (trailing space)
+            Target: "in" (no space)
+            Result: "in " (space restored)
+
+        Args:
+            source_text: Original text with correct whitespace pattern
+            target_text: Translated text (may be missing whitespace)
+
+        Returns:
+            Target text with source whitespace pattern applied
+        """
+        if not source_text:
+            return target_text
+
+        # Strip target to get clean translated text
+        clean_target = target_text.strip()
+
+        # Analyze source whitespace pattern
+        leading_ws = ''
+        trailing_ws = ''
+
+        # Extract leading whitespace
+        for char in source_text:
+            if char in (' ', '\t', '\n', '\r'):
+                leading_ws += char
+            else:
+                break
+
+        # Extract trailing whitespace
+        for char in reversed(source_text):
+            if char in (' ', '\t', '\n', '\r'):
+                trailing_ws = char + trailing_ws
+            else:
+                break
+
+        # Apply whitespace pattern to target
+        result = leading_ws + clean_target + trailing_ws
+
+        return result
 
     def _final_cleanup(self, output_path: str) -> int:
         """

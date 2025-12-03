@@ -363,11 +363,16 @@ class XLFTranslator:
             "1. Return valid JSON only - no other text",
             "2. Format: {\"translations\": [{\"id\": \"unit_id\", \"text\": \"translated text\"}, ...]}",
             "3. Preserve __SEG__ markers EXACTLY if present (do not translate, move, or remove)",
+            "4. PRESERVE ALL WHITESPACE:",
+            "   - If source text ends with a space, translation MUST end with a space",
+            "   - If source text starts with a space, translation MUST start with a space",
+            "   - Preserve line breaks (\\n) and other whitespace characters exactly",
+            "   - This is CRITICAL for proper text rendering in Storyline",
         ])
 
         if preserve_terms:
             terms_str = ", ".join(f'"{term}"' for term in preserve_terms)
-            prompt_parts.append(f"4. Do NOT translate these terms: {terms_str}")
+            prompt_parts.append(f"5. Do NOT translate these terms: {terms_str}")
 
         prompt_parts.extend([
             "",
@@ -468,7 +473,7 @@ class XLFTranslator:
             ])
 
         prompt_parts.append("CRITICAL RULES:")
-        
+
         if has_seg_markers:
             prompt_parts.extend([
                 "1. The text contains __SEG__ markers. These are STRUCTURAL MARKERS.",
@@ -477,7 +482,7 @@ class XLFTranslator:
                 "   - Keep __SEG__ in the EXACT SAME POSITIONS in the translation",
                 ""
             ])
-        
+
         if preserve_terms:
             terms_str = ", ".join(f'"{term}"' for term in preserve_terms)
             prompt_parts.extend([
@@ -485,14 +490,21 @@ class XLFTranslator:
                 "   - Keep them exactly as written in the source text",
                 ""
             ])
-        
+
         prompt_parts.extend([
-            "3. Preserve the tone and style:",
+            "3. PRESERVE ALL WHITESPACE:",
+            "   - If source text ends with a space, translation MUST end with a space",
+            "   - If source text starts with a space, translation MUST start with a space",
+            "   - Preserve line breaks (\\n, \\r\\n) exactly",
+            "   - This is CRITICAL for proper text rendering in Storyline",
+            "   - Text segments in Storyline don't auto-space, so missing spaces cause words to run together",
+            "",
+            "4. Preserve the tone and style:",
             "   - This is UI text for an interactive learning module",
             "   - Keep it natural, friendly, and engaging",
             "   - Maintain any formatting like line breaks",
             "",
-            "4. OUTPUT FORMAT:",
+            "5. OUTPUT FORMAT:",
             "   - Provide ONLY the translated text",
             "   - No explanations, no notes, no markdown formatting",
             "   - Just the pure translation",
