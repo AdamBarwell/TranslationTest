@@ -88,6 +88,12 @@ class XLFWriter:
         """
         Write x-DocumentState translation with inline tags
 
+        Handles:
+        - Extra __SEG__ markers from GPT-4
+        - Markers at string boundaries
+        - Empty segments
+        - Mismatched segment counts
+
         Args:
             target_elem: The <target> element to write to
             translated_text: Translated text (may contain __SEG__ markers)
@@ -113,23 +119,62 @@ class XLFWriter:
 
         # Now update the translatable content in <g> tags
         if unit.g_segments:
-            # Split translated text by __SEG__ markers
-            if '__SEG__' in translated_text:
-                translated_segments = translated_text.split(' __SEG__ ')
-            else:
-                # If no markers, treat as single segment
-                translated_segments = [translated_text]
+            # Get source g tags to know how many segments we SHOULD have
+            source_g_tags = source_elem.findall('.//xliff:g[@ctype="x-text"]', self.NS)
+            expected_segments = len(source_g_tags)
 
-            # Find all <g ctype="x-text"> elements in target
-            g_tags = target_elem.findall('.//xliff:g[@ctype="x-text"]', self.NS)
+            # ROBUST SPLITTING LOGIC
+            # Step 1: Split by __SEG__ (with or without spaces)
+            # Handle both ' __SEG__ ' and '__SEG__'
+            raw_segments = translated_text.split(' __SEG__ ')
+            if len(raw_segments) == 1:
+                # Try without spaces
+                raw_segments = translated_text.split('__SEG__')
 
-            # Update each <g> tag with corresponding translated segment
-            for idx, g_tag in enumerate(g_tags):
-                if idx < len(translated_segments):
-                    g_tag.text = translated_segments[idx]
-                else:
-                    # Fallback: keep original if we don't have enough segments
-                    pass
+            # Step 2: Clean each segment
+            # - Strip whitespace
+            # - Remove any remaining __SEG__ markers (in case they're in the middle)
+            # - Remove empty segments
+            cleaned_segments = []
+            for seg in raw_segments:
+                cleaned = seg.strip()
+                # Remove any __SEG__ that might still be in the text
+                cleaned = cleaned.replace('__SEG__', '').strip()
+                if cleaned:  # Only keep non-empty segments
+                    cleaned_segments.append(cleaned)
+
+            # Step 3: Handle segment count mismatch
+            if len(cleaned_segments) != expected_segments:
+                print(f"      ⚠️  Unit {unit.id}: Segment count mismatch")
+                print(f"         Expected: {expected_segments} (from source <g> tags)")
+                print(f"         Got: {len(cleaned_segments)} (after splitting/cleaning)")
+                print(f"         Raw split gave: {len(raw_segments)} segments")
+
+                # STRATEGY: Try to match segments intelligently
+                if len(cleaned_segments) < expected_segments:
+                    # Too few segments - pad with empty strings
+                    while len(cleaned_segments) < expected_segments:
+                        cleaned_segments.append('')
+                    print(f"         → Padded to {expected_segments} segments")
+
+                elif len(cleaned_segments) > expected_segments:
+                    # Too many segments - need to merge some
+                    print(f"         → Merging extra segments")
+
+                    # Simple strategy: merge extra segments into the last one
+                    merged_segments = cleaned_segments[:expected_segments-1]
+                    merged_segments.append(' '.join(cleaned_segments[expected_segments-1:]))
+                    cleaned_segments = merged_segments
+
+                    print(f"         → Result: {len(cleaned_segments)} segments")
+
+            # Step 4: Update <g> tag text content with cleaned segments
+            target_g_tags = target_elem.findall('.//xliff:g[@ctype="x-text"]', self.NS)
+
+            for g_tag, segment_text in zip(target_g_tags, cleaned_segments):
+                # FINAL SAFETY CHECK: Remove any remaining __SEG__
+                final_text = segment_text.replace('__SEG__', '').strip()
+                g_tag.text = final_text
         else:
             # No g_segments, just copy structure
             pass
@@ -161,6 +206,47 @@ class XLFWriter:
 
         return new_elem
 
+    def _final_cleanup(self, output_path: str) -> int:
+        """
+        Final safety pass: Remove ANY remaining __SEG__ markers
+
+        This is the SAFETY NET that catches anything the writer missed.
+
+        Args:
+            output_path: Path to the output XLF file
+
+        Returns:
+            Number of markers removed
+        """
+        tree = etree.parse(output_path)
+        removed_count = 0
+
+        for unit in tree.findall('.//xliff:trans-unit', self.NS):
+            target = unit.find('xliff:target', self.NS)
+
+            if target is None:
+                continue
+
+            # Check every <g> tag
+            g_tags = target.findall('.//xliff:g[@ctype="x-text"]', self.NS)
+
+            for g_tag in g_tags:
+                if g_tag.text and '__SEG__' in g_tag.text:
+                    original = g_tag.text
+                    cleaned = g_tag.text.replace('__SEG__', '').strip()
+                    g_tag.text = cleaned
+                    removed_count += 1
+
+                    print(f"      🧹 Cleaned {unit.get('id')}, <g id='{g_tag.get('id')}'>:")
+                    print(f"         Before: '{original[:50]}...'")
+                    print(f"         After:  '{cleaned[:50]}...'")
+
+        if removed_count > 0:
+            # Save the cleaned file
+            tree.write(output_path, encoding='utf-8', xml_declaration=True, pretty_print=True)
+
+        return removed_count
+
     def save(self, output_path: str, pretty_print: bool = True):
         """
         Save the modified XLF file
@@ -176,6 +262,16 @@ class XLFWriter:
             xml_declaration=True,
             pretty_print=pretty_print
         )
+
+        # Run final cleanup pass
+        print(f"\n🧹 Running final cleanup pass...")
+        removed = self._final_cleanup(output_path)
+
+        if removed > 0:
+            print(f"⚠️  Final cleanup removed {removed} remaining __SEG__ marker(s)")
+            print(f"✅ File has been cleaned and re-saved")
+        else:
+            print(f"✅ No cleanup needed - file is clean")
 
     def get_statistics(self):
         """Get statistics about modifications"""
@@ -218,17 +314,20 @@ class XLFWriter:
                 issues['missing_targets'].append(unit_id)
                 continue
 
-            # Get all text from target
-            target_text = ''.join(target.itertext())
+            # CRITICAL CHECK: Look for __SEG__ markers in individual <g> tags
+            g_tags = target.findall('.//xliff:g[@ctype="x-text"]', NS)
 
-            # CRITICAL CHECK: Look for __SEG__ markers
-            if '__SEG__' in target_text:
-                seg_count = target_text.count('__SEG__')
-                issues['seg_markers'].append({
-                    'unit_id': unit_id,
-                    'count': seg_count,
-                    'preview': target_text[:100]
-                })
+            for g_tag in g_tags:
+                if g_tag.text and '__SEG__' in g_tag.text:
+                    issues['seg_markers'].append({
+                        'unit_id': unit_id,
+                        'g_id': g_tag.get('id'),
+                        'text': g_tag.text,
+                        'marker_count': g_tag.text.count('__SEG__')
+                    })
+
+            # Get all text from target for empty check
+            target_text = ''.join(target.itertext())
 
             # Check for empty targets
             if not target_text.strip():
@@ -246,6 +345,9 @@ class XLFWriter:
                         'target_tags': target_g_count
                     })
 
+        # Calculate total markers
+        total_seg_markers = sum(item['marker_count'] for item in issues['seg_markers'])
+
         # Calculate validity
         is_valid = (
             len(issues['seg_markers']) == 0 and  # NO __SEG__ markers!
@@ -255,7 +357,8 @@ class XLFWriter:
         return {
             'is_valid': is_valid,
             'issues': issues,
-            'total_seg_markers': len(issues['seg_markers']),
+            'total_seg_markers': total_seg_markers,
+            'affected_g_tags': len(issues['seg_markers']),
             'total_issues': sum(len(v) if isinstance(v, list) else 0 for v in issues.values())
         }
 
