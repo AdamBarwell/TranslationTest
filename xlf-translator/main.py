@@ -6,10 +6,14 @@ Provides an interactive workflow for translating XLF files using OpenAI GPT-4o
 import os
 from pathlib import Path
 from typing import Optional, List
+from dotenv import load_dotenv
 
 from src.parser import XLFParser
 from src.translator import XLFTranslator
 from src.writer import XLFWriter
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def clear_screen():
