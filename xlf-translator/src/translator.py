@@ -112,7 +112,7 @@ class XLFTranslator:
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.3,  # Lower temperature for more consistent translations
-                    max_tokens=2000
+                    max_completion_tokens=2000
                 )
                 
                 translated_text = response.choices[0].message.content.strip()
@@ -319,7 +319,7 @@ class XLFTranslator:
                 }
             ],
             temperature=0.3,
-            max_tokens=4000,
+            max_completion_tokens=4000,
             response_format={"type": "json_object"}  # Force JSON response
         )
 
