@@ -4,16 +4,12 @@ Provides an interactive workflow for translating XLF files using OpenAI GPT-4o
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import Optional, List
 
-# Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
-from parser import XLFParser
-from translator import XLFTranslator
-from writer import XLFWriter
+from src.parser import XLFParser
+from src.translator import XLFTranslator
+from src.writer import XLFWriter
 
 
 def clear_screen():

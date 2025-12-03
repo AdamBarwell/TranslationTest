@@ -12,7 +12,7 @@ Works in conjunction with XLFParser to maintain file integrity.
 
 from lxml import etree
 from typing import Optional
-from parser import XLFParser, TransUnit
+from .parser import XLFParser, TransUnit
 
 
 class XLFWriter:
