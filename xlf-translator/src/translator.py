@@ -509,26 +509,36 @@ class XLFTranslator:
                             has_seg_markers: bool) -> tuple[bool, str]:
         """
         Validate the translation output
-        
+
         Returns:
             (is_valid, error_message)
         """
         # Check if translation is suspiciously similar (might be untranslated)
         if original == translated and len(original) > 10:
             return False, "Translation appears identical to source"
-        
+
         # Validate __SEG__ marker preservation
         if has_seg_markers:
             original_count = original.count('__SEG__')
             translated_count = translated.count('__SEG__')
-            
+
             if original_count != translated_count:
-                return False, f"__SEG__ marker count mismatch: expected {original_count}, got {translated_count}"
-        
+                # Log the mismatch but handle it differently based on the type
+                if translated_count > original_count:
+                    # GPT-4 added extra markers - log warning but don't fail
+                    # The writer will handle cleanup
+                    extra = translated_count - original_count
+                    print(f"      ⚠️  GPT-4 added {extra} extra __SEG__ marker(s) ({original_count} → {translated_count})")
+                    print(f"      → Writer will clean up extra markers")
+                    # Don't fail validation - let writer handle it
+                elif translated_count < original_count:
+                    # GPT-4 removed markers - this is critical
+                    return False, f"__SEG__ markers lost: expected {original_count}, got {translated_count}"
+
         # Check for common API errors
         if "I cannot" in translated or "I apologize" in translated:
             return False, "Translation contains refusal language"
-        
+
         return True, ""
     
     def get_statistics(self) -> Dict:
