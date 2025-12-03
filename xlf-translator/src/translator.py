@@ -349,13 +349,22 @@ class XLFTranslator:
             ""
         ]
 
-        # Add context if provided
+        # Add context (default + custom if provided)
+        context_lines = [
+            "CONTEXT:",
+            "This is training material for retail sales associates.",
+            "Use an informal, friendly tone throughout.",
+            "Ensure consistency in terminology and translations across all segments.",
+            "Adapt idioms naturally to the target language rather than translating literally.",
+            "Maintain consistent formality level (informal 'you' form where applicable)."
+        ]
+
         if custom_context:
-            prompt_parts.extend([
-                "CONTEXT:",
-                custom_context,
-                ""
-            ])
+            context_lines.append("")
+            context_lines.append(custom_context)
+
+        context_lines.append("")
+        prompt_parts.extend(context_lines)
 
         # Add rules
         prompt_parts.extend([
@@ -464,13 +473,22 @@ class XLFTranslator:
             ""
         ]
 
-        # Add custom context if provided
+        # Add context (default + custom if provided)
+        context_lines = [
+            "CONTEXT:",
+            "This is training material for retail sales associates.",
+            "Use an informal, friendly tone throughout.",
+            "Ensure consistency in terminology and translations across all segments.",
+            "Adapt idioms naturally to the target language rather than translating literally.",
+            "Maintain consistent formality level (informal 'you' form where applicable)."
+        ]
+
         if custom_context:
-            prompt_parts.extend([
-                "CONTEXT:",
-                custom_context,
-                ""
-            ])
+            context_lines.append("")
+            context_lines.append(custom_context)
+
+        context_lines.append("")
+        prompt_parts.extend(context_lines)
 
         prompt_parts.append("CRITICAL RULES:")
 
@@ -499,12 +517,7 @@ class XLFTranslator:
             "   - This is CRITICAL for proper text rendering in Storyline",
             "   - Text segments in Storyline don't auto-space, so missing spaces cause words to run together",
             "",
-            "4. Preserve the tone and style:",
-            "   - This is UI text for an interactive learning module",
-            "   - Keep it natural, friendly, and engaging",
-            "   - Maintain any formatting like line breaks",
-            "",
-            "5. OUTPUT FORMAT:",
+            "4. OUTPUT FORMAT:",
             "   - Provide ONLY the translated text",
             "   - No explanations, no notes, no markdown formatting",
             "   - Just the pure translation",
