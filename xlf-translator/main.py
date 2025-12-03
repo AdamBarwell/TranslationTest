@@ -1,6 +1,6 @@
 """
 XLF Translation Tool - Interactive CLI
-Provides an interactive workflow for translating XLF files using OpenAI GPT-4o
+Provides an interactive workflow for translating XLF files using OpenAI GPT-5.1
 """
 
 import os
@@ -372,9 +372,9 @@ def perform_translation(parser: XLFParser,
         return False
 
     # Initialize translator
-    print("🔄 Initializing translator (GPT-4o)...")
+    print("🔄 Initializing translator (GPT-5.1)...")
     try:
-        translator = XLFTranslator(api_key=api_key, model="gpt-4o")
+        translator = XLFTranslator(api_key=api_key, model="gpt-5.1")
     except Exception as e:
         print(f"❌ Error initializing translator: {e}")
         return False
@@ -516,7 +516,7 @@ def main():
         clear_screen()
         print_header("XLF Translation Tool")
         print("Welcome to the interactive XLF translator!")
-        print("This tool uses OpenAI GPT-4o for high-quality translations.")
+        print("This tool uses OpenAI GPT-5.1 for high-quality translations.")
 
         # Step 1: List and select file
         xlf_files = list_xlf_files()

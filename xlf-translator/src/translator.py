@@ -34,13 +34,13 @@ class TranslationResult:
 class XLFTranslator:
     """Translator for XLF content using OpenAI API"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-5.1"):
         """
         Initialize translator with API key
-        
+
         Args:
             api_key: OpenAI API key (or set OPENAI_API_KEY env var)
-            model: OpenAI model to use (default: gpt-4o)
+            model: OpenAI model to use (default: gpt-5.1)
         """
         if OpenAI is None:
             raise ImportError("openai package required. Install with: pip install openai")
